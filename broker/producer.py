@@ -41,9 +41,19 @@ class Producer:
         return partition.partition_id, offset
 
     async def send_batch(self, events: List[Event]):
-        """Send multiple events concurrently across partitions."""
-        tasks = [self.send(event) for event in events]
-        return await asyncio.gather(*tasks)
+        """Send multiple events while batching writes per partition."""
+        partitioned: dict[int, list[Event]] = {}
+        for event in events:
+            partition = self._get_partition(event.partition_key or event.user_id)
+            partitioned.setdefault(partition.partition_id, []).append(event)
+
+        results = []
+        for partition_id, batch in partitioned.items():
+            partition = self.partitions[partition_id]
+            offsets = await partition.produce_batch(batch)
+            self.total_sent += len(batch)
+            results.extend((partition_id, offset) for offset in offsets)
+        return results
 
     def get_partition_stats(self) -> List[dict]:
         return [p.stats() for p in self.partitions]

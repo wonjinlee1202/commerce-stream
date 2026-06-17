@@ -329,24 +329,49 @@ const API_URL = "http://localhost:8000";
 
 export default function Dashboard() {
   const { data, connected, flashSale } = useWebSocket(WS_URL);
-  const [history, setHistory] = useState({ eps: [], revenue: [] });
+  const [history, setHistory] = useState({ eps: [], revenue: [], latency: [] });
+  const [resetting, setResetting] = useState(false);
 
   const metrics = data?.metrics || {};
   const broker = data?.broker || [];
   const sim = data?.simulator || {};
+  const engine = data?.engine || {};
 
   // Maintain rolling history for time-series charts
   useEffect(() => {
     if (!data?.metrics) return;
     const now = Date.now() / 1000;
     setHistory(prev => ({
-      eps: [...prev.eps.slice(-59), { ts: now, count: metrics.current_eps || 0 }],
+      eps: [...prev.eps.slice(-59), {
+        ts: now,
+        count: metrics.avg_eps_5s || 0,
+        raw: metrics.current_eps || 0,
+      }],
       revenue: metrics.revenue_per_minute?.length ? metrics.revenue_per_minute : prev.revenue,
+      latency: [...prev.latency.slice(-59), {
+        ts: now,
+        p50: metrics.p50_latency_ms || 0,
+        p99: metrics.p99_latency_ms || 0,
+      }],
     }));
   }, [data]);
 
   const triggerFlashSale = async () => {
-    await fetch(`${API_URL}/simulator/flash-sale?duration=30&multiplier=8`, { method: "POST" });
+    await fetch(`${API_URL}/simulator/flash-sale`, { method: "POST" });
+  };
+
+  const resetSystem = async () => {
+    if (resetting) return;
+    const confirmed = window.confirm("Fully reset the engine? This clears live metrics, queues, logs, and checkpoints.");
+    if (!confirmed) return;
+
+    setResetting(true);
+    try {
+      await fetch(`${API_URL}/system/reset`, { method: "POST" });
+      setHistory({ eps: [], revenue: [], latency: [] });
+    } finally {
+      setResetting(false);
+    }
   };
 
   const deviceData = Object.entries(metrics.device_distribution || {}).map(([name, value]) => ({ name, value }));
@@ -424,6 +449,24 @@ export default function Dashboard() {
           >
             ⚡ TRIGGER FLASH SALE
           </button>
+          <button onClick={resetSystem} disabled={resetting} style={{
+            background: resetting ? C.red + "22" : "transparent",
+            border: `1px solid ${C.red}`,
+            color: C.red,
+            padding: "6px 14px",
+            borderRadius: 6,
+            cursor: resetting ? "wait" : "pointer",
+            fontSize: 10,
+            fontFamily: "'Space Mono', monospace",
+            letterSpacing: "0.1em",
+            transition: "all 0.2s",
+            opacity: resetting ? 0.7 : 1,
+          }}
+            onMouseEnter={e => { if (!resetting) e.target.style.background = `${C.red}22`; }}
+            onMouseLeave={e => { if (!resetting) e.target.style.background = resetting ? `${C.red}22` : "transparent"; }}
+          >
+            {resetting ? "RESETTING..." : "RESET SYSTEM"}
+          </button>
         </div>
       </div>
 
@@ -433,21 +476,50 @@ export default function Dashboard() {
         <FlashSaleBanner active={flashSale} />
 
         {/* KPI Row */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12 }}>
           <KPICard label="Total Revenue" value={metrics.total_revenue || 0} format={fmt.currency} color={C.accent} icon="$"
             sub={`AOV ${fmt.currency(metrics.avg_order_value || 0)}`} />
           <KPICard label="Total Orders" value={metrics.total_orders || 0} format={fmt.num} color={C.blue} icon="📦"
             sub={`${metrics.refunds || 0} refunds`} />
           <KPICard label="Active Users" value={metrics.active_users || 0} format={fmt.num} color={C.purple} icon="👤"
             sub="unique this session" />
-          <KPICard label="Events/sec" value={metrics.current_eps || 0} format={v => `${fmt.num(v)} eps`} color={C.orange} icon="⚡"
-            sub={`${fmt.num(metrics.total_events || 0)} total`} />
+          <KPICard label="Events/sec" value={metrics.avg_eps_5s || 0} format={v => `${fmt.num(v)} eps`} color={C.orange} icon="⚡"
+            sub={`raw ${fmt.num(metrics.current_eps || 0)} eps`} />
+          <KPICard label="Latency P50" value={metrics.p50_latency_ms || 0} format={v => `${v}ms`} color={C.red} icon="⏱"
+            sub={`P99 ${metrics.p99_latency_ms || 0}ms`} />
           <KPICard label="Partitions" value={broker.length || 0} format={v => `${v} active`} color={C.yellow} icon="⚙"
             sub={`${broker.reduce((s,p) => s + p.lag, 0)} total lag`} />
         </div>
 
-        {/* Revenue + EPS Charts */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div className="card" style={{
+          background: C.surface,
+          border: `1px solid ${C.border}`,
+          borderRadius: 12,
+          padding: "14px 18px",
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 12,
+        }}>
+          <div>
+            <div style={{ color: C.textDim, fontSize: 10, letterSpacing: "0.12em" }}>MODE</div>
+            <div style={{ color: C.accent, fontSize: 16, fontWeight: 700 }}>{(engine.mode || "demo").toUpperCase()}</div>
+          </div>
+          <div>
+            <div style={{ color: C.textDim, fontSize: 10, letterSpacing: "0.12em" }}>SHARDS</div>
+            <div style={{ color: C.text, fontSize: 16, fontWeight: 700 }}>{fmt.num(engine.shard_count || 0)}</div>
+          </div>
+          <div>
+            <div style={{ color: C.textDim, fontSize: 10, letterSpacing: "0.12em" }}>BATCH SIZE</div>
+            <div style={{ color: C.text, fontSize: 16, fontWeight: 700 }}>{fmt.num(engine.batch_size || 0)}</div>
+          </div>
+          <div>
+            <div style={{ color: C.textDim, fontSize: 10, letterSpacing: "0.12em" }}>UPTIME</div>
+            <div style={{ color: C.text, fontSize: 16, fontWeight: 700 }}>{Math.round(engine.uptime_seconds || 0)}s</div>
+          </div>
+        </div>
+
+        {/* Revenue + EPS + Latency Charts */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
           <div className="card" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
             <SectionHeader title="REVENUE / MINUTE" sub="Windowed aggregation — 60-min rolling" />
             <ResponsiveContainer width="100%" height={160}>
@@ -468,7 +540,7 @@ export default function Dashboard() {
           </div>
 
           <div className="card" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
-            <SectionHeader title="EVENTS / SECOND" sub="Real-time throughput — last 60 seconds" />
+            <SectionHeader title="EVENTS / SECOND" sub="5-second rolling average — last 60 seconds" />
             <ResponsiveContainer width="100%" height={160}>
               <AreaChart data={history.eps}>
                 <defs>
@@ -479,11 +551,65 @@ export default function Dashboard() {
                 </defs>
                 <XAxis dataKey="ts" tickFormatter={fmt.ts} tick={{ fill: C.textDim, fontSize: 9, fontFamily: "'Space Mono'" }} />
                 <YAxis tick={{ fill: C.textDim, fontSize: 9, fontFamily: "'Space Mono'" }} width={35} />
-                <Tooltip content={<CustomTooltip valueFormat={v => `${v} eps`} />} />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    return (
+                      <div style={{
+                        background: C.surface, border: `1px solid ${C.border}`,
+                        borderRadius: 8, padding: "8px 12px", fontFamily: "'Space Mono', monospace", fontSize: 11,
+                      }}>
+                        <div style={{ color: C.textDim, marginBottom: 4 }}>{fmt.ts(label)}</div>
+                        <div style={{ color: C.orange }}>avg: {fmt.num(payload[0]?.value || 0)} eps</div>
+                        <div style={{ color: C.textDim }}>raw: {fmt.num(payload[0]?.payload?.raw || 0)} eps</div>
+                      </div>
+                    );
+                  }}
+                />
                 <Area type="monotone" dataKey="count" stroke={C.orange} strokeWidth={2}
                   fill="url(#epsGrad)" dot={false} isAnimationActive={false} />
               </AreaChart>
             </ResponsiveContainer>
+          </div>
+
+          <div className="card" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+            <SectionHeader title="END-TO-END LATENCY" sub="Event creation → state store — last 60 seconds" />
+            <ResponsiveContainer width="100%" height={160}>
+              <LineChart data={history.latency}>
+                <XAxis dataKey="ts" tickFormatter={fmt.ts} tick={{ fill: C.textDim, fontSize: 9, fontFamily: "'Space Mono'" }} />
+                <YAxis tick={{ fill: C.textDim, fontSize: 9, fontFamily: "'Space Mono'" }} width={42}
+                  tickFormatter={v => `${v}ms`} />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    return (
+                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontFamily: "'Space Mono', monospace", fontSize: 11 }}>
+                        <div style={{ color: C.textDim, marginBottom: 4 }}>{fmt.ts(label)}</div>
+                        <div style={{ color: C.red }}>P50: {payload[0]?.value}ms</div>
+                        <div style={{ color: C.red + "88" }}>P99: {payload[1]?.value}ms</div>
+                      </div>
+                    );
+                  }}
+                />
+                <Line type="monotone" dataKey="p50" stroke={C.red} strokeWidth={2}
+                  dot={false} isAnimationActive={false} name="P50" />
+                <Line type="monotone" dataKey="p99" stroke={C.red + "55"} strokeWidth={1.5}
+                  strokeDasharray="4 4" dot={false} isAnimationActive={false} name="P99" />
+              </LineChart>
+            </ResponsiveContainer>
+            <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 20, height: 2, background: C.red, borderRadius: 1 }} />
+                <span style={{ color: C.textDim, fontSize: 9, fontFamily: "'Space Mono', monospace" }}>P50</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 20, height: 1, background: C.red + "55", borderRadius: 1, borderTop: `1px dashed ${C.red}55` }} />
+                <span style={{ color: C.textDim, fontSize: 9, fontFamily: "'Space Mono', monospace" }}>P99</span>
+              </div>
+              <div style={{ marginLeft: "auto", color: C.textDim, fontSize: 9, fontFamily: "'Space Mono', monospace" }}>
+                avg {metrics.avg_latency_ms || 0}ms
+              </div>
+            </div>
           </div>
         </div>
 
