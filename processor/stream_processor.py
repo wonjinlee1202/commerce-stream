@@ -21,13 +21,11 @@ class ShardWorker:
         self,
         partitions: List[Partition],
         pipeline: Pipeline,
-        state_store: StateStore,
         shard_id: str,
         batch_size: int,
     ):
         self.partitions = partitions
         self.pipeline = pipeline
-        self.state_store = state_store
         self.shard_id = shard_id
         self.batch_size = batch_size
         self.running = False
@@ -47,7 +45,7 @@ class ShardWorker:
                     continue
                 drained_any = True
                 try:
-                    await self.state_store.record_events(events)
+                    await self.pipeline.process_batch(events)
                     self.processed += len(events)
                 except Exception as e:
                     self.errors += 1
@@ -96,16 +94,10 @@ class StreamProcessor:
 
     def _build_pipeline(self) -> Pipeline:
         """
-        Build the processing pipeline.
-        All events flow through: record in state store (with WAL).
-        Purchases additionally update revenue aggregations.
+        Build the processing pipeline. Add .filter() or .map() calls here
+        to introduce per-event transformations before the state store sink.
         """
-        pipeline = Pipeline()
-
-        # Pass every event into the state store
-        pipeline.sink(self.state_store.record_event)
-
-        return pipeline
+        return Pipeline().sink(self.state_store.record_event)
 
     async def start(self):
         """Spawn one worker per shard as concurrent asyncio tasks."""
@@ -114,7 +106,6 @@ class StreamProcessor:
             worker = ShardWorker(
                 partitions=shard_partitions,
                 pipeline=pipeline,
-                state_store=self.state_store,
                 shard_id=f"shard-{shard_index}",
                 batch_size=self.batch_size,
             )

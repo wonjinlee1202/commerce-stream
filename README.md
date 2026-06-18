@@ -1,5 +1,8 @@
 # E-Commerce Stream Engine
 
+<!-- Demo GIF: record with `npm run dev` + backend running, then export as demo.gif -->
+<!-- ![Dashboard demo](demo.gif) -->
+
 A from-scratch real-time stream processing system inspired by Apache Kafka,
 Apache Flink, and Spark Streaming, built with Python, FastAPI, asyncio, and React.
 
@@ -75,7 +78,7 @@ The engine has been tuned significantly beyond the original prototype:
 ### Backend
 
 ```bash
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 uvicorn api.main:app --reload --port 8000
@@ -86,6 +89,21 @@ uvicorn api.main:app --reload --port 8000
 ```bash
 npm install
 npm run dev
+```
+
+### Docker (one-command start)
+
+```bash
+docker compose up
+```
+
+This starts both the backend (port 8000) and frontend (port 3000).
+
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
 ```
 
 Dashboard URL:
@@ -217,7 +235,6 @@ commerce-stream/
 │   ├── runtime.py
 │   └── __init__.py
 ├── broker/
-│   ├── consumer.py
 │   ├── partition.py
 │   └── producer.py
 ├── dashboard/
@@ -229,9 +246,18 @@ commerce-stream/
 │   └── stream_processor.py
 ├── simulator/
 │   └── event_generator.py
+├── tests/
+│   ├── test_partition.py
+│   ├── test_producer.py
+│   ├── test_pipeline.py
+│   └── test_state_store.py
 ├── checkpoints/
 ├── logs/
+├── Dockerfile
+├── docker-compose.yml
 ├── requirements.txt
+├── requirements-dev.txt
+├── pytest.ini
 ├── package.json
 └── README.md
 ```
@@ -261,8 +287,10 @@ commerce-stream/
 
 - execution is shard-oriented rather than implicitly tied to the API layer
 - each shard worker owns one or more partitions
-- workers consume batches instead of one event at a time
-- state updates are WAL-backed and applied in batches
+- workers consume batches from their partitions and run each event through a `Pipeline`
+- the `Pipeline` supports composable `.filter()`, `.map()`, `.aggregate()`, and `.sink()` operators inspired by Flink's DataStream API
+- the terminal sink is the `StateStore`, so all events flow: partition → pipeline → WAL → in-memory state
+- state updates are WAL-backed for fault tolerance
 
 ### Simulator
 

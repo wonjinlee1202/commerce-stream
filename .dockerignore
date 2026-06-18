@@ -1,0 +1,7 @@
+venv/
+node_modules/
+logs/
+checkpoints/
+__pycache__/
+*.pyc
+.git/

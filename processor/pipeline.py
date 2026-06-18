@@ -127,3 +127,8 @@ class Pipeline:
 
         if self._sink and value is not None:
             await self._sink(value)
+
+    async def process_batch(self, events: list) -> None:
+        """Run a batch of events through the pipeline sequentially."""
+        for event in events:
+            await self.process(event)
