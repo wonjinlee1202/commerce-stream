@@ -10,6 +10,8 @@ This project simulates high-volume e-commerce traffic, partitions it by user,
 processes it in near real time, persists broker/state logs for recovery, and
 renders live operational metrics in a dashboard.
 
+![Dashboard demo](assets/commerce-stream-gif.gif)
+
 ## Highlights
 
 - Sustained high-throughput demo mode tuned for roughly `10k` events/sec
