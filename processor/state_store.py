@@ -140,6 +140,14 @@ class StateStore:
         self._second_events: int = 0
         self._current_second: int = 0
 
+        # Exactly-once deduplication: track seen event IDs within a rolling window.
+        # Events arriving with a previously seen ID are dropped before state is touched.
+        self._seen_event_ids: dict[str, float] = {}  # event_id -> timestamp first seen
+        self._dedup_window_seconds: float = 30.0
+        self._dedup_prune_counter: int = 0
+        self._dedup_prune_interval: int = 5_000
+        self.duplicates_rejected: int = 0
+
         if recover_on_start:
             self._recover()
 
@@ -178,6 +186,12 @@ class StateStore:
         self._minute_orders = snapshot.get("_minute_orders", 0)
         self._current_second = snapshot.get("_current_second", 0)
         self._second_events = snapshot.get("_second_events", 0)
+        now = time.time()
+        self._seen_event_ids = {
+            eid: ts for eid, ts in snapshot.get("seen_event_ids", {}).items()
+            if ts > now - self._dedup_window_seconds
+        }
+        self.duplicates_rejected = snapshot.get("duplicates_rejected", 0)
 
     def _recover_from_wal(self):
         """Replay WAL to reconstruct state after crash."""
@@ -212,6 +226,11 @@ class StateStore:
             "_minute_orders": self._minute_orders,
             "_current_second": self._current_second,
             "_second_events": self._second_events,
+            "seen_event_ids": {
+                eid: ts for eid, ts in self._seen_event_ids.items()
+                if ts > time.time() - self._dedup_window_seconds
+            },
+            "duplicates_rejected": self.duplicates_rejected,
         }
         with open(self.snapshot_path, "w") as snapshot_file:
             json.dump(snapshot, snapshot_file)
@@ -221,6 +240,11 @@ class StateStore:
         op = entry.get("op")
         if op != "event":
             return
+
+        # Rebuild seen IDs during WAL recovery so dedup survives restarts
+        event_id = entry.get("event_id")
+        if event_id:
+            self._seen_event_ids[event_id] = entry.get("ts", time.time())
 
         event_type = entry.get("event_type")
         data = entry.get("data", {})
@@ -264,6 +288,29 @@ class StateStore:
             return
 
         now_time = time.time()
+
+        # Exactly-once: drop any event whose ID we've already processed.
+        # Prune stale IDs periodically to keep memory bounded.
+        self._dedup_prune_counter += len(events)
+        if self._dedup_prune_counter >= self._dedup_prune_interval:
+            self._dedup_prune_counter = 0
+            cutoff = now_time - self._dedup_window_seconds
+            self._seen_event_ids = {
+                eid: ts for eid, ts in self._seen_event_ids.items() if ts > cutoff
+            }
+
+        unique_events = []
+        for event in events:
+            if event.event_id in self._seen_event_ids:
+                self.duplicates_rejected += 1
+            else:
+                self._seen_event_ids[event.event_id] = now_time
+                unique_events.append(event)
+
+        if not unique_events:
+            return
+        events = unique_events
+
         second = int(now_time)
         minute = second // 60
         wal_entries = []
@@ -277,6 +324,7 @@ class StateStore:
 
             entry = {
                 "op": "event",
+                "event_id": event.event_id,
                 "event_type": event.event_type,
                 "user_id": event.user_id,
                 "data": event.data,
@@ -344,6 +392,7 @@ class StateStore:
             "p50_latency_ms": self.p50_latency_ms,
             "p99_latency_ms": self.p99_latency_ms,
             "avg_latency_ms": self.avg_latency_ms,
+            "duplicates_rejected": self.duplicates_rejected,
         }
 
     def close(self, compact: bool = True):
