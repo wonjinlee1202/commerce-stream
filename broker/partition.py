@@ -35,7 +35,8 @@ class Event:
 
 
 class Partition:
-    def __init__(self, partition_id: int, log_dir: str, max_queue_size: int = 10_000):
+    def __init__(self, partition_id: int, log_dir: str, max_queue_size: int = 10_000,
+                 log_max_bytes: int = 50 * 1024 * 1024):
         self.partition_id = partition_id
         self.log_path = os.path.join(log_dir, f"partition_{partition_id}.log")
         self.checkpoint_path = os.path.join(log_dir, f"partition_{partition_id}.checkpoint")
@@ -50,6 +51,12 @@ class Partition:
         self._flush_task: Optional[asyncio.Task] = None
         self._flush_every = 0.05
         self._flush_batch_size = 512
+
+        # Log retention: rewrite the log keeping the newest half when size exceeds cap
+        self._log_max_bytes = log_max_bytes
+        self._log_base_offset: int = 0  # lowest offset present in the log after rotation
+        self._flush_count: int = 0
+        self._rotation_check_interval: int = 10  # check size every N flushes
 
         # Metrics
         self.total_produced = 0
@@ -66,11 +73,16 @@ class Partition:
                 data = json.load(f)
                 self.committed_offset = data.get("committed_offset", 0)
                 self.offset = data.get("offset", 0)
+                self._log_base_offset = data.get("log_base_offset", 0)
 
     def _save_checkpoint(self):
         """Persist consumer offset to disk for fault tolerance."""
         with open(self.checkpoint_path, "w") as f:
-            json.dump({"committed_offset": self.committed_offset, "offset": self.offset}, f)
+            json.dump({
+                "committed_offset": self.committed_offset,
+                "offset": self.offset,
+                "log_base_offset": self._log_base_offset,
+            }, f)
 
     def open(self):
         """Open the append-only log file."""
@@ -102,6 +114,39 @@ class Partition:
         self._log_file.writelines(self._pending_log_entries)
         self._pending_log_entries.clear()
         self._log_file.flush()
+
+        self._flush_count += 1
+        if self._flush_count % self._rotation_check_interval == 0:
+            self._maybe_rotate_log()
+
+    def _maybe_rotate_log(self):
+        if not os.path.exists(self.log_path):
+            return
+        if os.path.getsize(self.log_path) < self._log_max_bytes:
+            return
+        self._rotate_log()
+
+    def _rotate_log(self):
+        """Rewrite the log keeping the newest half of entries to bound disk usage."""
+        if not self._log_file:
+            return
+        with open(self.log_path, "r") as f:
+            lines = [l for l in f if l.strip()]
+        if len(lines) < 2:
+            return
+
+        keep = lines[len(lines) // 2:]
+        try:
+            self._log_base_offset = json.loads(keep[0]).get("offset", self._log_base_offset)
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+        self._log_file.close()
+        with open(self.log_path, "w") as f:
+            f.writelines(keep)
+        self._log_file = open(self.log_path, "a", buffering=1024 * 1024)
+        self._save_checkpoint()
+        print(f"[Partition {self.partition_id}] Log rotated — base offset now {self._log_base_offset}")
 
     async def produce(self, event: Event) -> int:
         """
@@ -188,11 +233,12 @@ class Partition:
     def replay_from_offset(self, start_offset: int):
         """
         Generator that replays events from the log file starting at start_offset.
-        This is how we recover from crashes — re-read from last committed offset.
+        Entries before _log_base_offset have been rotated out and are no longer available.
         """
         if not os.path.exists(self.log_path):
             return
 
+        effective_start = max(start_offset, self._log_base_offset)
         with open(self.log_path, "r") as f:
             for line in f:
                 line = line.strip()
@@ -200,7 +246,7 @@ class Partition:
                     continue
                 try:
                     entry = json.loads(line)
-                    if entry["offset"] >= start_offset:
+                    if entry["offset"] >= effective_start:
                         yield Event(
                             event_id=entry["event_id"],
                             event_type=entry["event_type"],

@@ -25,6 +25,8 @@ class EngineConfig:
     log_dir: str
     wal_path: str
     snapshot_path: str
+    wal_compact_interval_seconds: float
+    log_max_bytes_per_partition: int
 
     @classmethod
     def from_env(cls) -> "EngineConfig":
@@ -97,6 +99,8 @@ class EngineConfig:
             log_dir=log_dir,
             wal_path=wal_path,
             snapshot_path=snapshot_path,
+            wal_compact_interval_seconds=float(os.getenv("ENGINE_WAL_COMPACT_INTERVAL", "300")),
+            log_max_bytes_per_partition=int(os.getenv("ENGINE_LOG_MAX_BYTES", str(50 * 1024 * 1024))),
         )
 
     def to_dict(self) -> dict:

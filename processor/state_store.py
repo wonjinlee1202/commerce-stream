@@ -395,6 +395,11 @@ class StateStore:
             "duplicates_rejected": self.duplicates_rejected,
         }
 
+    def compact(self):
+        """Save a snapshot and truncate the WAL. Safe to call while running."""
+        self._save_snapshot()
+        self.wal.reset()
+
     def close(self, compact: bool = True):
         if compact:
             self._save_snapshot()

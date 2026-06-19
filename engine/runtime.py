@@ -41,6 +41,7 @@ class EngineRuntime:
                 partition_id=i,
                 log_dir=self.config.log_dir,
                 max_queue_size=self.config.max_queue_size,
+                log_max_bytes=self.config.log_max_bytes_per_partition,
             )
             for i in range(self.config.num_partitions)
         ]
@@ -72,8 +73,17 @@ class EngineRuntime:
         self._tasks = [
             asyncio.create_task(self.simulator.run()),
             asyncio.create_task(self.simulator.run_flash_sale_scheduler()),
+            asyncio.create_task(self._compaction_loop()),
         ]
         self._started_at = time.time()
+
+    async def _compaction_loop(self):
+        """Periodically snapshot state and truncate the WAL to bound disk usage."""
+        while True:
+            await asyncio.sleep(self.config.wal_compact_interval_seconds)
+            if self.state_store is not None:
+                self.state_store.compact()
+                print(f"[Engine] WAL compacted — snapshot saved, WAL reset")
 
     async def stop(self):
         async with self._lock:

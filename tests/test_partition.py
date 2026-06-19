@@ -92,3 +92,44 @@ async def test_replay_from_zero_returns_all(partition):
 
     replayed = list(partition.replay_from_offset(0))
     assert len(replayed) == 3
+
+
+async def test_log_rotation_bounds_file_size(tmp_path):
+    """Rotation discards the oldest half of entries and advances log_base_offset."""
+    import os
+    p = Partition(partition_id=0, log_dir=str(tmp_path), log_max_bytes=500)
+    p.open()
+    try:
+        for i in range(40):
+            await p.produce(make_event(f"e_{i}"))
+        p._flush_pending()
+        size_before = os.path.getsize(p.log_path)
+
+        p._rotate_log()
+
+        size_after = os.path.getsize(p.log_path)
+        assert size_after < size_before
+        assert p._log_base_offset == 20  # oldest half (offsets 0-19) dropped
+    finally:
+        p.close()
+
+
+async def test_replay_skips_rotated_offsets(tmp_path):
+    """replay_from_offset clamps to log_base_offset when earlier entries were rotated out."""
+    p = Partition(partition_id=0, log_dir=str(tmp_path), log_max_bytes=500)
+    p.open()
+    try:
+        for i in range(40):
+            await p.produce(make_event(f"e_{i}"))
+        p._flush_pending()
+        p._rotate_log()
+
+        # Requesting from offset 0 should only return what's still in the log
+        replayed = list(p.replay_from_offset(0))
+        assert all(e.event_id.startswith("e_") for e in replayed)
+        # The first replayed event offset must be >= log_base_offset
+        if replayed:
+            first_offset = int(replayed[0].event_id.split("_")[1])
+            assert first_offset >= p._log_base_offset
+    finally:
+        p.close()
