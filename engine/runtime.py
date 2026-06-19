@@ -142,6 +142,7 @@ class EngineRuntime:
             return
         self.simulator.base_rate = rate
         self.simulator.current_rate = rate
+        self.simulator.max_rate = rate * 1.2
 
     def is_ready(self) -> bool:
         return all(
