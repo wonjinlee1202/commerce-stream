@@ -2,5 +2,6 @@ venv/
 node_modules/
 dist/
 __pycache__/
+.claude/
 *.log
 *.wal
