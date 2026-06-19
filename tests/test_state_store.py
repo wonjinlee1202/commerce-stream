@@ -159,6 +159,39 @@ async def test_dedup_survives_wal_recovery(tmp_path):
     store2.close(compact=False)
 
 
+async def test_compact_truncates_wal_and_saves_snapshot(tmp_path):
+    wal_path = str(tmp_path / "state.wal")
+    snapshot_path = str(tmp_path / "state.snapshot.json")
+
+    store = StateStore(wal_path=wal_path, snapshot_path=snapshot_path, recover_on_start=False)
+    await store.record_events([make_event("purchase", amount=10.0, event_id=f"e_cmp_{i}") for i in range(3)])
+    store.wal.flush()
+
+    import os
+    assert os.path.getsize(wal_path) > 0
+
+    store.compact()
+
+    assert os.path.getsize(wal_path) == 0
+    assert os.path.exists(snapshot_path)
+    store.close(compact=False)
+
+
+async def test_compact_state_survives_recovery(tmp_path):
+    wal_path = str(tmp_path / "state.wal")
+    snapshot_path = str(tmp_path / "state.snapshot.json")
+
+    store1 = StateStore(wal_path=wal_path, snapshot_path=snapshot_path, recover_on_start=False)
+    await store1.record_events([make_event("purchase", amount=50.0, event_id=f"e_csr_{i}") for i in range(4)])
+    store1.compact()
+    store1.close(compact=False)
+
+    store2 = StateStore(wal_path=wal_path, snapshot_path=snapshot_path, recover_on_start=True)
+    assert store2.total_orders == 4
+    assert store2.total_revenue == pytest.approx(200.0)
+    store2.close(compact=False)
+
+
 async def test_snapshot_then_recovery(tmp_path):
     wal_path = str(tmp_path / "state.wal")
     snapshot_path = str(tmp_path / "state.snapshot.json")
