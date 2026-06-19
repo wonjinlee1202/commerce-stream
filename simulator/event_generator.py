@@ -113,6 +113,12 @@ class EventSimulator:
         # Maintain a pool of simulated users
         self._user_pool: List[UserSession] = [UserSession.new() for _ in range(2000)]
 
+        # Exactly-once demo: occasionally re-send a recent event to simulate producer retries.
+        # The state store's dedup logic should catch and reject every one of these.
+        self.duplicate_rate: float = 0.002  # ~0.2% of events are retried duplicates
+        self.total_duplicates_injected: int = 0
+        self._recent_events: List = []  # small buffer of recent events for re-sending
+
     def _current_lag(self) -> int:
         return sum(partition.get_lag() for partition in self.producer.partitions)
 
@@ -306,9 +312,20 @@ class EventSimulator:
             batch = []
             for _ in range(batch_size):
                 session = self._user_pool[random.randrange(len(self._user_pool))]
-                batch.append(self._make_fast_event(session))
+                event = self._make_fast_event(session)
+                batch.append(event)
+
+                # Simulate a producer retry: re-send a recent event with the same ID.
+                # The state store's exactly-once dedup will reject it on the other end.
+                if self._recent_events and random.random() < self.duplicate_rate:
+                    batch.append(self._recent_events[random.randrange(len(self._recent_events))])
+                    self.total_duplicates_injected += 1
+
+            # Keep a bounded buffer of recent events for duplicate injection
+            self._recent_events = batch[-100:]
+
             await self.producer.send_batch(batch)
-            self.total_generated += len(batch)
+            self.total_generated += batch_size  # count only original events
             elapsed = time.perf_counter() - tick_started
             if elapsed < self._fast_tick_seconds:
                 await asyncio.sleep(self._fast_tick_seconds - elapsed)
@@ -375,4 +392,6 @@ class EventSimulator:
             "max_lag": self.max_lag,
             "flash_sale_active": self.flash_sale_active,
             "user_pool_size": len(self._user_pool),
+            "total_duplicates_injected": self.total_duplicates_injected,
+            "duplicate_rate": self.duplicate_rate,
         }

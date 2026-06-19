@@ -3,7 +3,7 @@ from broker.partition import Event
 from processor.state_store import StateStore
 
 
-def make_event(event_type="page_view", amount=None, user_id="u_test", query=None):
+def make_event(event_type="page_view", amount=None, user_id="u_test", query=None, event_id="e_1"):
     data = {"country": "US", "device": "desktop"}
     if amount is not None:
         data.update({
@@ -16,7 +16,7 @@ def make_event(event_type="page_view", amount=None, user_id="u_test", query=None
     if query is not None:
         data["query"] = query
     return Event(
-        event_id="e_1",
+        event_id=event_id,
         event_type=event_type,
         timestamp=1000.0,
         user_id=user_id,
@@ -50,16 +50,16 @@ async def test_purchase_updates_revenue_and_orders(store):
 
 
 async def test_multiple_purchases_accumulate_revenue(store):
-    await store.record_event(make_event("purchase", amount=50.0))
-    await store.record_event(make_event("purchase", amount=75.0))
+    await store.record_event(make_event("purchase", amount=50.0, event_id="e_rev_1"))
+    await store.record_event(make_event("purchase", amount=75.0, event_id="e_rev_2"))
     assert store.total_orders == 2
     assert store.total_revenue == pytest.approx(125.0)
 
 
 async def test_tracks_unique_active_users(store):
-    await store.record_event(make_event(user_id="u_001"))
-    await store.record_event(make_event(user_id="u_002"))
-    await store.record_event(make_event(user_id="u_001"))  # duplicate
+    await store.record_event(make_event(user_id="u_001", event_id="e_usr_1"))
+    await store.record_event(make_event(user_id="u_002", event_id="e_usr_2"))
+    await store.record_event(make_event(user_id="u_001", event_id="e_usr_3"))  # same user, new event
     assert len(store.active_users) == 2
 
 
@@ -78,8 +78,8 @@ async def test_refund_tracking(store):
 
 
 async def test_geo_distribution_tracked(store):
-    await store.record_event(make_event())  # country=US
-    await store.record_event(make_event())
+    await store.record_event(make_event(event_id="e_geo_1"))
+    await store.record_event(make_event(event_id="e_geo_2"))
     assert store.geo_distribution["US"] == 2
 
 
@@ -89,7 +89,7 @@ async def test_search_terms_tracked(store):
 
 
 async def test_record_events_batch(store):
-    events = [make_event("purchase", amount=10.0) for _ in range(5)]
+    events = [make_event("purchase", amount=10.0, event_id=f"e_batch_{i}") for i in range(5)]
     await store.record_events(events)
     assert store.total_orders == 5
     assert store.total_revenue == pytest.approx(50.0)
@@ -116,12 +116,55 @@ async def test_wal_recovery_restores_state(tmp_path):
     store2.close(compact=False)
 
 
+async def test_duplicate_event_rejected(store):
+    event = make_event("purchase", amount=100.0, event_id="e_unique_purchase")
+    await store.record_event(event)
+    await store.record_event(event)  # same event_id — should be dropped
+    assert store.total_orders == 1
+    assert store.total_revenue == pytest.approx(100.0)
+    assert store.duplicates_rejected == 1
+
+
+async def test_unique_event_ids_all_processed(store):
+    for i in range(5):
+        await store.record_event(make_event("purchase", amount=10.0, event_id=f"e_purchase_{i}"))
+    assert store.total_orders == 5
+    assert store.duplicates_rejected == 0
+
+
+async def test_duplicate_in_batch_rejected(store):
+    events = [make_event("purchase", amount=50.0, event_id=f"e_batch_{i}") for i in range(3)]
+    duplicate = make_event("purchase", amount=50.0, event_id="e_batch_0")  # same ID as first
+    await store.record_events(events + [duplicate])
+    assert store.total_orders == 3  # not 4
+    assert store.total_revenue == pytest.approx(150.0)
+    assert store.duplicates_rejected == 1
+
+
+async def test_dedup_survives_wal_recovery(tmp_path):
+    wal_path = str(tmp_path / "state.wal")
+    snapshot_path = str(tmp_path / "state.snapshot.json")
+
+    store1 = StateStore(wal_path=wal_path, snapshot_path=snapshot_path, recover_on_start=False)
+    event = make_event("purchase", amount=99.0, event_id="e_dedup_recovery")
+    await store1.record_event(event)
+    store1.wal.flush()
+    store1.close(compact=False)
+
+    # After recovery, the same event_id should still be known — no double-count
+    store2 = StateStore(wal_path=wal_path, snapshot_path=snapshot_path, recover_on_start=True)
+    await store2.record_event(event)  # retry of the same event
+    assert store2.total_orders == 1
+    assert store2.duplicates_rejected == 1
+    store2.close(compact=False)
+
+
 async def test_snapshot_then_recovery(tmp_path):
     wal_path = str(tmp_path / "state.wal")
     snapshot_path = str(tmp_path / "state.snapshot.json")
 
     store1 = StateStore(wal_path=wal_path, snapshot_path=snapshot_path, recover_on_start=False)
-    await store1.record_events([make_event("purchase", amount=200.0) for _ in range(3)])
+    await store1.record_events([make_event("purchase", amount=200.0, event_id=f"e_snap_{i}") for i in range(3)])
     store1.close(compact=True)  # saves snapshot, resets WAL
 
     store2 = StateStore(wal_path=wal_path, snapshot_path=snapshot_path, recover_on_start=True)

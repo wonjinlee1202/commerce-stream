@@ -680,6 +680,39 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Exactly-Once Guarantee */}
+        <div className="card" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+          <SectionHeader
+            title="EXACTLY-ONCE GUARANTEE"
+            sub="Simulator injects ~0.2% duplicate events (producer retries) — state store deduplicates by event ID before touching state"
+          />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
+              <div style={{ color: C.textDim, fontSize: 10, letterSpacing: "0.12em", marginBottom: 6 }}>DUPLICATES INJECTED</div>
+              <div style={{ color: C.orange, fontSize: 22, fontWeight: 800, fontFamily: "'DM Mono', monospace" }}>
+                <AnimatedValue value={sim.total_duplicates_injected || 0} format={fmt.num} color={C.orange} />
+              </div>
+              <div style={{ color: C.textDim, fontSize: 10, marginTop: 4 }}>simulated producer retries</div>
+            </div>
+            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
+              <div style={{ color: C.textDim, fontSize: 10, letterSpacing: "0.12em", marginBottom: 6 }}>DUPLICATES REJECTED</div>
+              <div style={{ color: C.accent, fontSize: 22, fontWeight: 800, fontFamily: "'DM Mono', monospace" }}>
+                <AnimatedValue value={metrics.duplicates_rejected || 0} format={fmt.num} color={C.accent} />
+              </div>
+              <div style={{ color: C.textDim, fontSize: 10, marginTop: 4 }}>caught before state mutation</div>
+            </div>
+            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
+              <div style={{ color: C.textDim, fontSize: 10, letterSpacing: "0.12em", marginBottom: 6 }}>DEDUP EFFECTIVENESS</div>
+              <div style={{ color: C.purple, fontSize: 22, fontWeight: 800, fontFamily: "'DM Mono', monospace" }}>
+                {sim.total_duplicates_injected > 0
+                  ? `${Math.min(100, Math.round((metrics.duplicates_rejected / sim.total_duplicates_injected) * 100))}%`
+                  : "—"}
+              </div>
+              <div style={{ color: C.textDim, fontSize: 10, marginTop: 4 }}>injected duplicates caught</div>
+            </div>
+          </div>
+        </div>
+
         {/* Search Terms + Categories */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div className="card" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
