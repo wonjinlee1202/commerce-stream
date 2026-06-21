@@ -52,7 +52,7 @@ I wanted to understand *how* Kafka and Flink actually work — not just how to u
 
 ## Features
 
-- **~10k events/sec** sustained throughput with stable latency in demo mode
+- **~10k events/sec** sustained throughput with stable latency in local/dedicated mode
 - **Partitioned broker** with bounded queues enforcing backpressure when consumers fall behind
 - **Shard-oriented workers** that own subsets of partitions and drain in batches
 - **Flink-inspired pipeline** with composable `.filter()`, `.map()`, `.aggregate()`, and `.sink()` operators
