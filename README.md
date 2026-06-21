@@ -1,6 +1,10 @@
 # Commerce Stream
 
-A from-scratch real-time stream processing engine for e-commerce analytics, built without Kafka, Flink, or any managed streaming service. The system implements the core ideas behind those platforms — partitioned brokers, shard-oriented workers, write-ahead logs, backpressure, and exactly-once delivery — directly in Python and React.
+I wanted to understand *how* Kafka and Flink actually work — not just how to use them. So I built the core ideas myself: a partitioned broker, shard-oriented workers, write-ahead logs, backpressure, and exactly-once delivery, all in Python with a live React dashboard. No managed services, no frameworks doing the hard parts — just the primitives.
+
+**[Live Demo](https://commerce-stream.vercel.app)** · Built with Python / FastAPI / React
+
+![CI](https://github.com/wonjinlee1202/commerce-stream/actions/workflows/ci.yml/badge.svg)
 
 ![Dashboard demo](assets/commerce-stream-gif.gif)
 
@@ -90,6 +94,24 @@ commerce-stream/
 ├── requirements.txt
 └── requirements-dev.txt
 ```
+
+## Deployment
+
+The backend and frontend deploy independently.
+
+**Backend → [Render](https://render.com) (free tier)**
+
+1. Connect the repo in Render's dashboard — it picks up `render.yaml` automatically.
+2. The service starts on first deploy. Logs and checkpoints are written to the attached 1 GB disk.
+
+**Frontend → [Vercel](https://vercel.com) (free tier)**
+
+1. Import the repo in Vercel. It picks up `vercel.json` and runs `npm run build`.
+2. Add one environment variable in the Vercel project settings:
+   ```
+   VITE_API_URL=https://<your-render-service>.onrender.com
+   ```
+3. Redeploy — the dashboard will connect to the live backend over WebSocket.
 
 ## Setup
 

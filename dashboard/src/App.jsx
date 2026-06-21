@@ -513,8 +513,9 @@ function FlashSaleBanner({ active }) {
 }
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
-const WS_URL  = "ws://localhost:8000/ws/live";
-const API_URL = "http://localhost:8000";
+const _apiBase = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const WS_URL  = _apiBase.replace(/^http/, "ws") + "/ws/live";
+const API_URL = _apiBase;
 
 export default function Dashboard() {
   const { data, connected, flashSale } = useWebSocket(WS_URL);
